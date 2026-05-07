@@ -425,18 +425,23 @@ def simulate_tournament(n=500):
 #  ACCURACY
 # ─────────────────────────────────────────────────────────────────────────────
 
-@st.cache_data
+@st.cache_data(ttl=60)
 def load_accuracy(sport="ipl"):
     fname = f"{sport}_accuracy_log.json"
     p = Path(__file__).parent / "data" / fname
     if not p.exists():
-        # fallback to legacy
         if sport == "ipl":
             p = Path(__file__).parent / "data" / "accuracy_log.json"
     if not p.exists():
         return []
+    # ← add this guard
+    if p.stat().st_size == 0:
+        return []
     with open(p) as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return []   # corrupt file → treat as empty
 
 def save_accuracy(records, sport="ipl"):
     fname = f"{sport}_accuracy_log.json"
