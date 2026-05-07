@@ -1,0 +1,12 @@
+{
+  "Punjab Kings":                {"played": 9,  "won": 6, "lost": 2, "nr": 1, "pts": 13, "nrr":  0.855},
+  "Royal Challengers Bengaluru": {"played": 9,  "won": 6, "lost": 3, "nr": 0, "pts": 12, "nrr":  1.420},
+  "Sunrisers Hyderabad":         {"played": 10, "won": 6, "lost": 4, "nr": 0, "pts": 12, "nrr":  0.644},
+  "Rajasthan Royals":            {"played": 10, "won": 6, "lost": 4, "nr": 0, "pts": 12, "nrr":  0.510},
+  "Gujarat Titans":              {"played": 10, "won": 6, "lost": 4, "nr": 0, "pts": 12, "nrr": -0.147},
+  "Chennai Super Kings":         {"played": 10, "won": 5, "lost": 5, "nr": 0, "pts": 10, "nrr":  0.151},
+  "Delhi Capitals":              {"played": 10, "won": 4, "lost": 6, "nr": 0, "pts":  8, "nrr": -0.949},
+  "Kolkata Knight Riders":       {"played": 9,  "won": 3, "lost": 5, "nr": 1, "pts":  7, "nrr": -0.539},
+  "Mumbai Indians":              {"played": 10, "won": 3, "lost": 7, "nr": 0, "pts":  6, "nrr": -0.649},
+  "Lucknow Super Giants":        {"played": 9,  "won": 2, "lost": 7, "nr": 0, "pts":  4, "nrr": -1.076}
+}
