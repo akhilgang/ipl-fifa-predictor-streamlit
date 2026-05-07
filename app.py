@@ -425,7 +425,7 @@ def simulate_tournament(n=500):
 #  ACCURACY
 # ─────────────────────────────────────────────────────────────────────────────
 
-@st.cache_data(ttl=60)
+@st.cache_data
 def load_accuracy(sport="ipl"):
     fname = f"{sport}_accuracy_log.json"
     p = Path(__file__).parent / "data" / fname
@@ -527,20 +527,21 @@ FIFA_2026_TEAMS = sorted(set(t for teams in FIFA_GROUPS.values() for t in teams)
 st.markdown("""
 <div class="hero">
   <div class="hero-badge">AI · SPORTS PREDICTOR 2026</div>
-  <h1 class="hero-title">Match Oracle</h1>
+  <h1 class="hero-title">Sports Predictor</h1>
   <p class="hero-sub">Random Forest · IPL 2026 + FIFA World Cup 2026</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Sport selector pills
-sport_col1, sport_col2, sport_col3 = st.columns([1, 2, 1])
-with sport_col2:
-    sport = st.radio(
-        "Select Sport",
-        ["🏏 IPL 2026", "⚽ FIFA World Cup 2026"],
-        horizontal=True,
-        label_visibility="collapsed",
-    )
+# Sport selector — centered
+st.markdown('<div class="sport-selector-wrap">', unsafe_allow_html=True)
+sport = st.radio(
+    "Select Sport",
+    ["🏏 IPL 2026", "⚽ FIFA World Cup 2026"],
+    horizontal=True,
+    label_visibility="collapsed",
+    key="sport_radio",
+)
+st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
@@ -594,23 +595,6 @@ if sport == "🏏 IPL 2026":
                     "timestamp": datetime.now().isoformat(),
                 }
 
-        if "ipl_last_pred" in st.session_state and st.session_state["ipl_last_pred"]["actual_winner"] is None:
-            pred = st.session_state["ipl_last_pred"]
-            st.markdown("---")
-            st.markdown("**📝 Log actual result for this prediction:**")
-            actual = st.radio("Who actually won?",
-                              [pred["team1"], pred["team2"], "Match not played yet"],
-                              horizontal=True, key="ipl_actual_inline")
-            if st.button("Save Result", key="ipl_save_inline"):
-                if actual != "Match not played yet":
-                    records = load_accuracy("ipl")
-                    entry   = {**pred, "actual_winner": actual,
-                               "correct": "yes" if actual == pred["predicted_winner"] else "no"}
-                    records.append(entry)
-                    save_accuracy(records, "ipl")
-                    st.session_state["ipl_last_pred"]["actual_winner"] = actual
-                    st.success(f"✅ Saved! Prediction was {'correct ✓' if entry['correct']=='yes' else 'incorrect ✗'}")
-
     # ── IPL TAB 2 — SIMULATE ─────────────────────────────────────────────────
     with tab_sim:
         st.markdown('<div class="section-title">Season Simulation</div>', unsafe_allow_html=True)
@@ -623,7 +607,10 @@ if sport == "🏏 IPL 2026":
             st.info(f"**{len(remaining)}** remaining fixtures found. Running 1,000 Monte Carlo simulations.")
             if st.button("🎲 Run Simulation", use_container_width=True, type="primary", key="ipl_sim_btn"):
                 with st.spinner("Simulating season…"):
-                    result = simulate_ipl(ipl_points_raw, remaining, n=1000)
+                    st.session_state["ipl_sim_result"] = simulate_ipl(ipl_points_raw, remaining, n=1000)
+
+            if "ipl_sim_result" in st.session_state:
+                result = st.session_state["ipl_sim_result"]
                 st.markdown("### 🏆 Champion Probability")
                 champ = dict(sorted(result["champion_probability"].items(), key=lambda x: -x[1]))
                 for team, pct in champ.items():
@@ -821,27 +808,6 @@ else:  # FIFA World Cup 2026
                 "timestamp": datetime.now().isoformat(),
             }
 
-        # Log result
-        if "fifa_last_pred" in st.session_state and st.session_state["fifa_last_pred"]["actual_winner"] is None:
-            pred = st.session_state["fifa_last_pred"]
-            st.markdown("---")
-            st.markdown("**📝 Log actual result:**")
-            actual = st.radio("Actual result?",
-                              [pred["team1"] + " Win", "Draw", pred["team2"] + " Win", "Not played yet"],
-                              horizontal=True, key="fifa_actual_inline")
-            if st.button("Save Result", key="fifa_save_inline"):
-                if actual != "Not played yet":
-                    actual_winner = pred["team1"] if "Win" in actual and pred["team1"] in actual else (
-                                    pred["team2"] if "Win" in actual and pred["team2"] in actual else "Draw")
-                    records = load_accuracy("fifa")
-                    entry = {**pred,
-                             "actual_winner": actual_winner,
-                             "correct": "yes" if actual_winner == pred["predicted_winner"] else "no"}
-                    records.append(entry)
-                    save_accuracy(records, "fifa")
-                    st.session_state["fifa_last_pred"]["actual_winner"] = actual_winner
-                    st.success(f"✅ Saved! {'Correct ✓' if entry['correct']=='yes' else 'Incorrect ✗'}")
-
     # ── FIFA TAB 2 — GROUP STAGE ──────────────────────────────────────────────
     with tab_groups:
         st.markdown('<div class="section-title">Group Stage Predictions</div>', unsafe_allow_html=True)
@@ -923,7 +889,7 @@ else:  # FIFA World Cup 2026
         </p>
         """, unsafe_allow_html=True)
 
-        n_sims = st.slider("Number of Simulations", 100, 2000, 500, step=100, key="fifa_n_sims")
+        n_sims = st.slider("Number of Simulations", 30, 100, 50, step=10, key="fifa_n_sims")
 
         if st.button("🌍 Run Tournament Simulation", use_container_width=True, type="primary", key="fifa_sim_btn"):
             with st.spinner(f"Simulating {n_sims:,} World Cups…"):
