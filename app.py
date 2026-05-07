@@ -8,9 +8,8 @@ import joblib
 import json
 import random
 import os
-import sys
-sys.path.insert(0, str(Path(__file__).parent / "data"))
-from fifa_rankings import get_win_rate
+import pandas as pd
+import numpy as np
 from pathlib import Path
 from collections import defaultdict
 from copy import deepcopy
@@ -171,14 +170,6 @@ TEAM_ALIASES = {
     "Curacao":            "Curaçao",
     "USA":                "United States",
 }
-FIFA_STAGE_WEIGHT = {
-    "group stage":   5,
-    "round of 32":   7,
-    "round of 16":   8,
-    "quarter-final": 9,
-    "semi-final":    9,
-    "final":        10,
-}
 
 FIFA_GROUPS = {
     "A": ["Mexico",       "South Africa", "Korea Republic", "Czechia"],
@@ -310,7 +301,7 @@ FIFA_RANKING_POINTS: dict[str, float] = {
     "Austria":          1600.0,
     "Korea Republic":   1590.0,
     "Norway":           1580.0,
-    "South Korea":      1590.0,
+    "South Korea":      1590.0,  # alias
 
     # Mid-tier
     "Algeria":          1560.0,
@@ -320,107 +311,46 @@ FIFA_RANKING_POINTS: dict[str, float] = {
     "Tunisia":          1530.0,
     "Ghana":            1520.0,
     "IR Iran":          1515.0,
-    "Iran":             1515.0,
+    "Iran":             1515.0,  # alias
     "Paraguay":         1510.0,
     "Scotland":         1500.0,
     "Czechia":          1495.0,
-    "Czech Republic":   1495.0,
+    "Czech Republic":   1495.0,  # alias
     "Ivory Coast":      1490.0,
-    "Cote dIvoire":     1490.0,
+    "Cote dIvoire":     1490.0,  # alias
     "Jordan":           1450.0,
     "Uzbekistan":       1440.0,
     "Cabo Verde":       1435.0,
-    "Cape Verde":       1435.0,
+    "Cape Verde":       1435.0,  # alias
     "Bosnia Herzegovina":  1430.0,
-    "Bosnia and Herzegovina": 1430.0,
+    "Bosnia and Herzegovina": 1430.0,  # alias
     "Curacao":          1380.0,
-    "Curaçao":          1380.0,
+    "Curaçao":          1380.0,  # alias
     "Congo DR":         1370.0,
-    "DR Congo":         1370.0,
+    "DR Congo":         1370.0,  # alias
     "South Africa":     1360.0,
     "New Zealand":      1340.0,
     "Iraq":             1330.0,
     "Panama":           1310.0,
     "Qatar":            1290.0,
     "Haiti":            1240.0,
-
-    # Lower tier defaults
-    "Chile":            1580.0,
-    "Denmark":          1740.0,
-    "Italy":            1770.0,
-    "Poland":           1565.0,
-    "Wales":            1530.0,
-    "Serbia":           1560.0,
-    "Ukraine":          1545.0,
-    "Peru":             1555.0,
-    "Nigeria":          1530.0,
-    "Cameroon":         1500.0,
-    "Costa Rica":       1460.0,
-    "Jamaica":          1400.0,
-    "Honduras":         1370.0,
-    "El Salvador":      1340.0,
-    "Venezuela":        1480.0,
-    "Bolivia":          1380.0,
-    "China PR":         1320.0,
-    "India":            1290.0,
-    "Thailand":         1280.0,
-    "Vietnam":          1260.0,
-    "Malaysia":         1250.0,
-    "Indonesia":        1240.0,
-    "Philippines":      1230.0,
-    "Singapore":        1210.0,
-    "Russia":           1500.0,
-    "Romania":          1480.0,
-    "Greece":           1470.0,
-    "Hungary":          1540.0,
-    "Slovakia":         1475.0,
-    "Iceland":          1460.0,
-    "Republic of Ireland": 1440.0,
-    "Ireland":          1440.0,
-    "Northern Ireland": 1390.0,
-    "Finland":          1430.0,
-    "Bulgaria":         1380.0,
-    "Albania":          1440.0,
-    "North Macedonia":  1380.0,
-    "Georgia":          1430.0,
-    "Slovenia":         1500.0,
-    "Montenegro":       1420.0,
-    "Luxembourg":       1350.0,
-    "Kosovo":           1380.0,
-    "Armenia":          1360.0,
-    "Azerbaijan":       1300.0,
-    "Belarus":          1310.0,
-    "Lithuania":        1290.0,
-    "Latvia":           1280.0,
-    "Estonia":          1270.0,
-    "Malta":            1230.0,
-    "Cyprus":           1270.0,
-    "Faroe Islands":    1220.0,
-    "Gibraltar":        1100.0,
-    "Liechtenstein":    1110.0,
-    "Andorra":          1120.0,
-    "San Marino":       1050.0,
-    "Moldova":          1270.0,
-    "Kazakhstan":       1360.0,
-    "Israel":           1430.0,
 }
-
-# Default ranking for unknown teams
 DEFAULT_RANKING_POINTS = 1200.0
+
 def get_ranking_points(team: str) -> float:
     """Get FIFA ranking points for a team, with fallback."""
     return FIFA_RANKING_POINTS.get(team, DEFAULT_RANKING_POINTS)
 
 MAX_RANKING = 1900.0
 MIN_RANKING = 1000.0
-
 TOURNAMENT_WEIGHT_FIFA = 10  # FIFA World Cup
-def _enc_fifa(le, val, fallback=0):
-    try:    return int(le.transform([val])[0])
-    except: return fallback
 
 def resolve_team(name):
     return TEAM_ALIASES.get(name, name)
+
+def _enc_fifa(le, val, fallback=0):
+    try:    return int(le.transform([val])[0])
+    except: return fallback
 
 def predict_fifa(home, away, h_wr=0.5, a_wr=0.5):
     """
@@ -588,13 +518,18 @@ def load_accuracy(sport="ipl"):
     fname = f"{sport}_accuracy_log.json"
     p = Path(__file__).parent / "data" / fname
     if not p.exists():
-        # fallback to legacy
         if sport == "ipl":
             p = Path(__file__).parent / "data" / "accuracy_log.json"
     if not p.exists():
         return []
+    # ← add this guard
+    if p.stat().st_size == 0:
+        return []
     with open(p) as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except json.JSONDecodeError:
+            return []   # corrupt file → treat as empty
 
 def save_accuracy(records, sport="ipl"):
     fname = f"{sport}_accuracy_log.json"
@@ -685,20 +620,21 @@ FIFA_2026_TEAMS = sorted(set(t for teams in FIFA_GROUPS.values() for t in teams)
 st.markdown("""
 <div class="hero">
   <div class="hero-badge">AI · SPORTS PREDICTOR 2026</div>
-  <h1 class="hero-title">Match Oracle</h1>
+  <h1 class="hero-title">Sports Predictor</h1>
   <p class="hero-sub">Random Forest · IPL 2026 + FIFA World Cup 2026</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Sport selector pills
-sport_col1, sport_col2, sport_col3 = st.columns([1, 2, 1])
-with sport_col2:
-    sport = st.radio(
-        "Select Sport",
-        ["🏏 IPL 2026", "⚽ FIFA World Cup 2026"],
-        horizontal=True,
-        label_visibility="collapsed",
-    )
+# Sport selector — centered
+st.markdown('<div class="sport-selector-wrap">', unsafe_allow_html=True)
+sport = st.radio(
+    "Select Sport",
+    ["🏏 IPL 2026", "⚽ FIFA World Cup 2026"],
+    horizontal=True,
+    label_visibility="collapsed",
+    key="sport_radio",
+)
+st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
@@ -752,23 +688,6 @@ if sport == "🏏 IPL 2026":
                     "timestamp": datetime.now().isoformat(),
                 }
 
-        if "ipl_last_pred" in st.session_state and st.session_state["ipl_last_pred"]["actual_winner"] is None:
-            pred = st.session_state["ipl_last_pred"]
-            st.markdown("---")
-            st.markdown("**📝 Log actual result for this prediction:**")
-            actual = st.radio("Who actually won?",
-                              [pred["team1"], pred["team2"], "Match not played yet"],
-                              horizontal=True, key="ipl_actual_inline")
-            if st.button("Save Result", key="ipl_save_inline"):
-                if actual != "Match not played yet":
-                    records = load_accuracy("ipl")
-                    entry   = {**pred, "actual_winner": actual,
-                               "correct": "yes" if actual == pred["predicted_winner"] else "no"}
-                    records.append(entry)
-                    save_accuracy(records, "ipl")
-                    st.session_state["ipl_last_pred"]["actual_winner"] = actual
-                    st.success(f"✅ Saved! Prediction was {'correct ✓' if entry['correct']=='yes' else 'incorrect ✗'}")
-
     # ── IPL TAB 2 — SIMULATE ─────────────────────────────────────────────────
     with tab_sim:
         st.markdown('<div class="section-title">Season Simulation</div>', unsafe_allow_html=True)
@@ -781,7 +700,10 @@ if sport == "🏏 IPL 2026":
             st.info(f"**{len(remaining)}** remaining fixtures found. Running 1,000 Monte Carlo simulations.")
             if st.button("🎲 Run Simulation", use_container_width=True, type="primary", key="ipl_sim_btn"):
                 with st.spinner("Simulating season…"):
-                    result = simulate_ipl(ipl_points_raw, remaining, n=1000)
+                    st.session_state["ipl_sim_result"] = simulate_ipl(ipl_points_raw, remaining, n=1000)
+
+            if "ipl_sim_result" in st.session_state:
+                result = st.session_state["ipl_sim_result"]
                 st.markdown("### 🏆 Champion Probability")
                 champ = dict(sorted(result["champion_probability"].items(), key=lambda x: -x[1]))
                 for team, pct in champ.items():
@@ -904,73 +826,71 @@ else:  # FIFA World Cup 2026
         with col1:
             st.markdown('<div class="team-label">HOME / TEAM 1</div>', unsafe_allow_html=True)
             f_t1 = st.selectbox("Home Team", FIFA_2026_TEAMS, key="fifa_t1", label_visibility="collapsed")
+            f_t1_wr = st.slider("Team 1 recent win rate %", 0, 100, 50, key="fifa_t1wr") / 100
+
         with col2:
             st.markdown('<div class="vs-block">VS</div>', unsafe_allow_html=True)
+
         with col3:
             st.markdown('<div class="team-label">AWAY / TEAM 2</div>', unsafe_allow_html=True)
             f_t2_opts = [t for t in FIFA_2026_TEAMS if t != f_t1]
             f_t2 = st.selectbox("Away Team", f_t2_opts, key="fifa_t2", label_visibility="collapsed")
- 
+            f_t2_wr = st.slider("Team 2 recent win rate %", 0, 100, 50, key="fifa_t2wr") / 100
+
         f_stage = st.selectbox(
             "Match Stage",
             ["Group Stage", "Round of 32", "Round of 16", "Quarter-final", "Semi-final", "Final"],
             key="fifa_stage"
         )
- 
-        # Optional manual override — hidden by default so ranking is used automatically
-        with st.expander("⚙️ Override win rates (optional — rankings used by default)"):
-            _gwr = get_win_rate 
-            _def_h = int(_gwr(f_t1) * 100)
-            _def_a = int(_gwr(f_t2) * 100)
-            col_l, col_r = st.columns(2)
-            with col_l:
-                f_t1_wr_pct = st.slider(f"{f_t1} win rate %", 0, 100, _def_h, key="fifa_t1wr")
-            with col_r:
-                f_t2_wr_pct = st.slider(f"{f_t2} win rate %", 0, 100, _def_a, key="fifa_t2wr")
-            use_override = st.checkbox("Apply manual overrides", value=False, key="fifa_override")
- 
-        h_wr_arg = (f_t1_wr_pct / 100) if use_override else None
-        a_wr_arg = (f_t2_wr_pct / 100) if use_override else None
- 
+
         if st.button("🔮 Predict Match", use_container_width=True, type="primary", key="fifa_predict_btn"):
-            res = predict_fifa(f_t1, f_t2, h_wr=h_wr_arg, a_wr=a_wr_arg, stage=f_stage)
+            res = predict_fifa(f_t1, f_t2, f_t1_wr, f_t2_wr)
             p_win  = res["win"]  * 100
             p_draw = res["draw"] * 100
             p_loss = res["loss"] * 100
             likely = res["likely"]
-            eff_h  = res["h_wr"] * 100
-            eff_a  = res["a_wr"] * 100
- 
-            winner_text  = f_t1 if likely == "win" else (f_t2 if likely == "loss" else "DRAW")
-            result_label = "WIN" if likely != "draw" else ""
- 
-            st.markdown(f\"""
+
+            if likely == "win":
+                winner_text = f_t1
+                result_label = "WIN"
+            elif likely == "loss":
+                winner_text = f_t2
+                result_label = "WIN"
+            else:
+                winner_text = "DRAW"
+                result_label = ""
+
+            st.markdown(f"""
             <div class="result-card">
               <div class="result-winner">{'🏆 ' + winner_text if result_label == 'WIN' else '🤝 ' + winner_text}</div>
               <div class="result-sub">{"predicted winner" if result_label == "WIN" else "most likely outcome"}</div>
-              <div style="color:var(--muted);font-size:0.75rem;margin-top:0.4rem;">
-                Ranking win-rates used: {f_t1} {eff_h:.0f}% · {f_t2} {eff_a:.0f}%
-              </div>
               <div class="prob-row" style="margin-top:1.5rem;">
                 <div class="prob-item">
                   <div class="prob-name">{f_t1} Win</div>
-                  <div class="prob-bar-wrap"><div class="prob-bar" style="width:{p_win:.0f}%"></div></div>
+                  <div class="prob-bar-wrap">
+                    <div class="prob-bar" style="width:{p_win:.0f}%"></div>
+                  </div>
                   <div class="prob-pct">{p_win:.1f}%</div>
                 </div>
                 <div class="prob-item">
                   <div class="prob-name">Draw</div>
-                  <div class="prob-bar-wrap"><div class="prob-bar" style="width:{p_draw:.0f}%;background:linear-gradient(90deg,var(--gold),#d97706)"></div></div>
+                  <div class="prob-bar-wrap">
+                    <div class="prob-bar" style="width:{p_draw:.0f}%;background:linear-gradient(90deg,var(--gold),#d97706)"></div>
+                  </div>
                   <div class="prob-pct">{p_draw:.1f}%</div>
                 </div>
                 <div class="prob-item">
                   <div class="prob-name">{f_t2} Win</div>
-                  <div class="prob-bar-wrap"><div class="prob-bar t2" style="width:{p_loss:.0f}%"></div></div>
+                  <div class="prob-bar-wrap">
+                    <div class="prob-bar t2" style="width:{p_loss:.0f}%"></div>
+                  </div>
                   <div class="prob-pct">{p_loss:.1f}%</div>
                 </div>
               </div>
             </div>
-            \""", unsafe_allow_html=True)
- 
+            """, unsafe_allow_html=True)
+
+            # Determine predicted_winner for logging
             pw = f_t1 if likely == "win" else (f_t2 if likely == "loss" else "Draw")
             st.session_state["fifa_last_pred"] = {
                 "match_id": f"FIFA_{f_t1.replace(' ','_')}_{f_t2.replace(' ','_')}_{datetime.now().strftime('%Y%m%d%H%M')}",
@@ -980,27 +900,6 @@ else:  # FIFA World Cup 2026
                 "actual_winner": None, "correct": None,
                 "timestamp": datetime.now().isoformat(),
             }
-
-        # Log result
-        if "fifa_last_pred" in st.session_state and st.session_state["fifa_last_pred"]["actual_winner"] is None:
-            pred = st.session_state["fifa_last_pred"]
-            st.markdown("---")
-            st.markdown("**📝 Log actual result:**")
-            actual = st.radio("Actual result?",
-                              [pred["team1"] + " Win", "Draw", pred["team2"] + " Win", "Not played yet"],
-                              horizontal=True, key="fifa_actual_inline")
-            if st.button("Save Result", key="fifa_save_inline"):
-                if actual != "Not played yet":
-                    actual_winner = pred["team1"] if "Win" in actual and pred["team1"] in actual else (
-                                    pred["team2"] if "Win" in actual and pred["team2"] in actual else "Draw")
-                    records = load_accuracy("fifa")
-                    entry = {**pred,
-                             "actual_winner": actual_winner,
-                             "correct": "yes" if actual_winner == pred["predicted_winner"] else "no"}
-                    records.append(entry)
-                    save_accuracy(records, "fifa")
-                    st.session_state["fifa_last_pred"]["actual_winner"] = actual_winner
-                    st.success(f"✅ Saved! {'Correct ✓' if entry['correct']=='yes' else 'Incorrect ✗'}")
 
     # ── FIFA TAB 2 — GROUP STAGE ──────────────────────────────────────────────
     with tab_groups:
@@ -1083,7 +982,7 @@ else:  # FIFA World Cup 2026
         </p>
         """, unsafe_allow_html=True)
 
-        n_sims = st.slider("Number of Simulations", 100, 2000, 500, step=100, key="fifa_n_sims")
+        n_sims = st.slider("Number of Simulations", 30, 100, 50, step=10, key="fifa_n_sims")
 
         if st.button("🌍 Run Tournament Simulation", use_container_width=True, type="primary", key="fifa_sim_btn"):
             with st.spinner(f"Simulating {n_sims:,} World Cups…"):
