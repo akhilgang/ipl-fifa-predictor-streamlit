@@ -66,9 +66,20 @@ def _enc(le, val, fallback=0):
 
 IPL_STAGE_W = {"league": 1, "qualifier": 2, "eliminator": 2, "final": 3}
 
+IPL_FEATURE_NAMES = [
+    "t1_enc", "t2_enc",
+    "toss_won_by_team1", "toss_bat_first",
+    "venue_enc", "stage_weight",
+    "t1_win_rate", "t2_win_rate",
+    "t1_streak", "t2_streak",
+    "wr_diff", "streak_diff",
+    "h2h_t1_win_rate",
+    "season_num",
+]
+
 def build_ipl_features(t1, t2, venue, stage, t1_wr, t2_wr, model, le_t1, le_t2, le_venue):
     sw = IPL_STAGE_W.get(stage.lower(), 1)
-    return [[
+    values = [
         _enc(le_t1, t1), _enc(le_t2, t2),
         1, 1,
         _enc(le_venue, venue) if venue else 0,
@@ -77,7 +88,8 @@ def build_ipl_features(t1, t2, venue, stage, t1_wr, t2_wr, model, le_t1, le_t2, 
         0, 0,
         t1_wr - t2_wr, 0,
         0.5, 2026,
-    ]]
+    ]
+    return pd.DataFrame([values], columns=IPL_FEATURE_NAMES)
 
 def predict_ipl(t1, t2, venue, stage, t1_wr, t2_wr):
     model, le_t1, le_t2, le_venue = load_ipl_artifacts()
@@ -380,18 +392,26 @@ def predict_fifa(home, away, h_wr=0.5, a_wr=0.5):
         a_enc = 0
 
     # Build feature vector (matches training model expectations)
-    features = [[
-        h_enc, a_enc, 
-        10,  # Tournament weight (FIFA World Cup)
-        1,   # Neutral venue
+    feat_values = [
+        h_enc, a_enc,
+        10,    # Tournament weight (FIFA World Cup)
+        1,     # Neutral venue
         h_wr, a_wr,
-        0.0, 0.0,  # avg_gd placeholders
-        h_wr - a_wr, 0.0,  # gd_diff placeholder
-        0.33,  # h2h default
+        0.0, 0.0,          # avg_gd placeholders
+        h_wr - a_wr, 0.0,  # wr_diff, gd_diff
+        0.33,              # h2h default
         home_pts, away_pts, ranking_diff,
         ranking_ratio, home_norm, away_norm,
-        ranking_diff_norm
-    ]]
+        ranking_diff_norm,
+    ]
+
+    # Wrap in DataFrame with training feature names to avoid sklearn warning.
+    # Load names from fifa_features.json; fall back to plain array if missing.
+    feat_names = load_json("fifa_features.json")
+    if feat_names and len(feat_names) == len(feat_values):
+        features = pd.DataFrame([feat_values], columns=feat_names)
+    else:
+        features = [feat_values]
     
     proba   = model.predict_proba(features)[0]
     classes = list(model.classes_)
@@ -858,8 +878,7 @@ if sport == "🏏 IPL 2026":
             st.caption("Use only to correct NRR or fix data errors. Enter Results updates points automatically.")
             if ipl_points_raw:
                 updated = deepcopy(ipl_points_raw)
-                current_only = [t for t in ipl_points_raw if t in IPL_CURRENT_TEAMS]
-                for team in sorted(current_only):
+                for team in sorted(t for t in ipl_points_raw if t in ipl_teams):
                     row = ipl_points_raw[team]
                     with st.expander(team):
                         c1, c2, c3, c4 = st.columns(4)
