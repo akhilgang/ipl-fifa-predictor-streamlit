@@ -8,6 +8,8 @@ import joblib
 import json
 import random
 import os
+import pandas as pd
+import numpy as np
 from pathlib import Path
 from collections import defaultdict
 from copy import deepcopy
@@ -270,7 +272,77 @@ FIFA_GROUP_FIXTURES = [
     ("Panama", "England", "2026-06-25"),
     ("Croatia", "Ghana", "2026-06-25"),
 ]
+FIFA_RANKING_POINTS: dict[str, float] = {
+    # Elite
+    "Argentina":        1896.0,
+    "France":           1866.0,
+    "England":          1856.0,
+    "Belgium":          1830.0,
+    "Brazil":           1820.0,
+    "Portugal":         1810.0,
+    "Netherlands":      1808.0,
+    "Spain":            1800.0,
+    "Germany":          1790.0,
+    "Uruguay":          1745.0,
 
+    # Strong
+    "Colombia":         1735.0,
+    "Switzerland":      1710.0,
+    "Japan":            1705.0,
+    "Morocco":          1695.0,
+    "Croatia":          1690.0,
+    "Mexico":           1680.0,
+    "USA":              1650.0,
+    "Senegal":          1640.0,
+    "Sweden":           1630.0,
+    "Australia":        1620.0,
+    "Ecuador":          1610.0,
+    "Turkey":           1605.0,
+    "Austria":          1600.0,
+    "Korea Republic":   1590.0,
+    "Norway":           1580.0,
+    "South Korea":      1590.0,  # alias
+
+    # Mid-tier
+    "Algeria":          1560.0,
+    "Canada":           1555.0,
+    "Egypt":            1550.0,
+    "Saudi Arabia":     1540.0,
+    "Tunisia":          1530.0,
+    "Ghana":            1520.0,
+    "IR Iran":          1515.0,
+    "Iran":             1515.0,  # alias
+    "Paraguay":         1510.0,
+    "Scotland":         1500.0,
+    "Czechia":          1495.0,
+    "Czech Republic":   1495.0,  # alias
+    "Ivory Coast":      1490.0,
+    "Cote dIvoire":     1490.0,  # alias
+    "Jordan":           1450.0,
+    "Uzbekistan":       1440.0,
+    "Cabo Verde":       1435.0,
+    "Cape Verde":       1435.0,  # alias
+    "Bosnia Herzegovina":  1430.0,
+    "Bosnia and Herzegovina": 1430.0,  # alias
+    "Curacao":          1380.0,
+    "Curaçao":          1380.0,  # alias
+    "Congo DR":         1370.0,
+    "DR Congo":         1370.0,  # alias
+    "South Africa":     1360.0,
+    "New Zealand":      1340.0,
+    "Iraq":             1330.0,
+    "Panama":           1310.0,
+    "Qatar":            1290.0,
+    "Haiti":            1240.0,
+}
+DEFAULT_RANKING_POINTS = 1200.0
+
+def get_ranking_points(team: str) -> float:
+    """Get FIFA ranking points for a team, with fallback."""
+    return FIFA_RANKING_POINTS.get(team, DEFAULT_RANKING_POINTS)
+
+MAX_RANKING = 1900.0
+MIN_RANKING = 1000.0
 TOURNAMENT_WEIGHT_FIFA = 10  # FIFA World Cup
 
 def resolve_team(name):
@@ -282,39 +354,55 @@ def _enc_fifa(le, val, fallback=0):
 
 def predict_fifa(home, away, h_wr=0.5, a_wr=0.5):
     """
-    Returns {"win": p, "draw": p, "loss": p, "likely": outcome}
-    outcome is from home team perspective: win/draw/loss
+    Predicts match outcome using features from trained model.
     """
     model, le_home, le_away = load_fifa_artifacts()
-    h_res = resolve_team(home)
-    a_res = resolve_team(away)
-    h_enc = _enc_fifa(le_home, h_res)
-    a_enc = _enc_fifa(le_away, a_res)
-    wr_diff = h_wr - a_wr
-    gd_diff = 0.0
-    feats = [[
-        h_enc, a_enc,
-        TOURNAMENT_WEIGHT_FIFA,
-        1,            # is_neutral (World Cup = neutral venue)
+    
+    # Get ranking points
+    home_pts = get_ranking_points(home)
+    away_pts = get_ranking_points(away)
+    
+    # Calculate ranking features
+    ranking_diff = home_pts - away_pts
+    ranking_ratio = home_pts / away_pts if away_pts > 0 else 1.0
+    home_norm = (home_pts - MIN_RANKING) / (MAX_RANKING - MIN_RANKING)
+    away_norm = (away_pts - MIN_RANKING) / (MAX_RANKING - MIN_RANKING)
+    ranking_diff_norm = home_norm - away_norm
+
+    # Encode teams
+    try:
+        h_enc = le_home.transform([home])[0]
+    except ValueError:
+        h_enc = 0
+    try:
+        a_enc = le_away.transform([away])[0]
+    except ValueError:
+        a_enc = 0
+
+    # Build feature vector (matches training model expectations)
+    features = [[
+        h_enc, a_enc, 
+        10,  # Tournament weight (FIFA World Cup)
+        1,   # Neutral venue
         h_wr, a_wr,
-        0.0, 0.0,     # avg_gd placeholders
-        wr_diff, gd_diff,
-        0.33,         # h2h default
+        0.0, 0.0,  # avg_gd placeholders
+        h_wr - a_wr, 0.0,  # gd_diff placeholder
+        0.33,  # h2h default
+        home_pts, away_pts, ranking_diff,
+        ranking_ratio, home_norm, away_norm,
+        ranking_diff_norm
     ]]
-    proba   = model.predict_proba(feats)[0]
+    
+    proba   = model.predict_proba(features)[0]
     classes = list(model.classes_)
     prob_map = {c: float(proba[i]) for i, c in enumerate(classes)}
-    p_win  = prob_map.get("win",  0.33)
-    p_draw = prob_map.get("draw", 0.34)
-    p_loss = prob_map.get("loss", 0.33)
-    # Normalise
-    total  = p_win + p_draw + p_loss
-    p_win, p_draw, p_loss = p_win/total, p_draw/total, p_loss/total
-    likely = "win" if p_win >= p_draw and p_win >= p_loss else (
-             "draw" if p_draw >= p_loss else "loss")
+    
     return {
-        "win": round(p_win, 4), "draw": round(p_draw, 4), "loss": round(p_loss, 4),
-        "likely": likely,
+        "win": round(prob_map.get("win", 0.33), 4),
+        "draw": round(prob_map.get("draw", 0.34), 4),
+        "loss": round(prob_map.get("loss", 0.33), 4),
+        "likely": "win" if prob_map.get("win",0) >= prob_map.get("draw",0) and prob_map.get("win",0) >= prob_map.get("loss",0) 
+                 else ("draw" if prob_map.get("draw",0) >= prob_map.get("loss",0) else "loss")
     }
 
 def simulate_group(group_teams):
@@ -516,10 +604,29 @@ def render_prob_bars(t1, t2, p1_pct, p2_pct, winner):
 #  DATA LOADS
 # ─────────────────────────────────────────────────────────────────────────────
 
-ipl_teams      = load_json("ipl_teams.json") or []
+ipl_teams_raw  = load_json("ipl_teams.json") or []
 ipl_points_raw = load_json("ipl_points_table.json") or {}
 ipl_fixtures   = load_json("ipl_fixtures.json") or []
 ipl_venues     = sorted(set(f.get("venue", "") for f in ipl_fixtures if f.get("venue")))
+
+# Canonical current IPL franchises — filter out defunct/renamed teams that
+# may still appear in ipl_teams.json from historical training data
+IPL_CURRENT_TEAMS = {
+    "Chennai Super Kings",
+    "Delhi Capitals",
+    "Gujarat Titans",
+    "Kolkata Knight Riders",
+    "Lucknow Super Giants",
+    "Mumbai Indians",
+    "Punjab Kings",
+    "Rajasthan Royals",
+    "Royal Challengers Bengaluru",
+    "Sunrisers Hyderabad",
+}
+# Use current teams list; fall back to raw JSON if it somehow has no overlap
+ipl_teams = sorted(t for t in ipl_teams_raw if t in IPL_CURRENT_TEAMS)
+if not ipl_teams:
+    ipl_teams = sorted(IPL_CURRENT_TEAMS)  # hardcoded fallback
 
 fifa_teams_raw = load_json("fifa_teams.json") or []
 # All FIFA 2026 participating teams
@@ -567,13 +674,11 @@ if sport == "🏏 IPL 2026":
         with col1:
             st.markdown('<div class="team-label">TEAM 1</div>', unsafe_allow_html=True)
             t1 = st.selectbox("Team 1", ipl_teams, key="ipl_t1", label_visibility="collapsed")
-            t1_wr_pct = st.slider("Team 1 recent win rate %", 0, 100, 50, key="ipl_t1wr")
         with col2:
             st.markdown('<div class="vs-block">VS</div>', unsafe_allow_html=True)
         with col3:
             st.markdown('<div class="team-label">TEAM 2</div>', unsafe_allow_html=True)
             t2 = st.selectbox("Team 2", [t for t in ipl_teams if t != t1], key="ipl_t2", label_visibility="collapsed")
-            t2_wr_pct = st.slider("Team 2 recent win rate %", 0, 100, 50, key="ipl_t2wr")
 
         col_v, col_s = st.columns(2)
         with col_v:
@@ -586,7 +691,7 @@ if sport == "🏏 IPL 2026":
             if t1 == t2:
                 st.error("Please select two different teams.")
             else:
-                result = predict_ipl(t1, t2, venue, stage, t1_wr_pct/100, t2_wr_pct/100)
+                result = predict_ipl(t1, t2, venue, stage, 0.5, 0.5)
                 winner = result["winner"]
                 p1     = result["p_t1"] * 100
                 p2     = result["p_t2"] * 100
@@ -609,10 +714,11 @@ if sport == "🏏 IPL 2026":
             st.warning("No points table loaded. Upload `ipl_points_table.json` to the `data/` folder.")
         else:
             remaining = [f for f in ipl_fixtures if not f.get("played", False)]
-            st.info(f"**{len(remaining)}** remaining fixtures found. Running 1,000 Monte Carlo simulations.")
+            n_ipl_sims = st.slider("Number of Simulations", 200, 1000, 500, step=100, key="ipl_n_sims")
+            st.info(f"**{len(remaining)}** remaining fixtures found. Will run **{n_ipl_sims}** Monte Carlo simulations.")
             if st.button("🎲 Run Simulation", use_container_width=True, type="primary", key="ipl_sim_btn"):
                 with st.spinner("Simulating season…"):
-                    st.session_state["ipl_sim_result"] = simulate_ipl(ipl_points_raw, remaining, n=1000)
+                    st.session_state["ipl_sim_result"] = simulate_ipl(ipl_points_raw, remaining, n=n_ipl_sims)
 
             if "ipl_sim_result" in st.session_state:
                 result = st.session_state["ipl_sim_result"]
@@ -738,7 +844,6 @@ else:  # FIFA World Cup 2026
         with col1:
             st.markdown('<div class="team-label">HOME / TEAM 1</div>', unsafe_allow_html=True)
             f_t1 = st.selectbox("Home Team", FIFA_2026_TEAMS, key="fifa_t1", label_visibility="collapsed")
-            f_t1_wr = st.slider("Team 1 recent win rate %", 0, 100, 50, key="fifa_t1wr") / 100
 
         with col2:
             st.markdown('<div class="vs-block">VS</div>', unsafe_allow_html=True)
@@ -747,7 +852,6 @@ else:  # FIFA World Cup 2026
             st.markdown('<div class="team-label">AWAY / TEAM 2</div>', unsafe_allow_html=True)
             f_t2_opts = [t for t in FIFA_2026_TEAMS if t != f_t1]
             f_t2 = st.selectbox("Away Team", f_t2_opts, key="fifa_t2", label_visibility="collapsed")
-            f_t2_wr = st.slider("Team 2 recent win rate %", 0, 100, 50, key="fifa_t2wr") / 100
 
         f_stage = st.selectbox(
             "Match Stage",
@@ -756,7 +860,7 @@ else:  # FIFA World Cup 2026
         )
 
         if st.button("🔮 Predict Match", use_container_width=True, type="primary", key="fifa_predict_btn"):
-            res = predict_fifa(f_t1, f_t2, f_t1_wr, f_t2_wr)
+            res = predict_fifa(f_t1, f_t2)
             p_win  = res["win"]  * 100
             p_draw = res["draw"] * 100
             p_loss = res["loss"] * 100
@@ -894,12 +998,14 @@ else:  # FIFA World Cup 2026
         </p>
         """, unsafe_allow_html=True)
 
-        n_sims = st.slider("Number of Simulations", 30, 100, 50, step=10, key="fifa_n_sims")
+        n_sims = st.slider("Number of Simulations", 15, 50, 30, step=5, key="fifa_n_sims")
 
         if st.button("🌍 Run Tournament Simulation", use_container_width=True, type="primary", key="fifa_sim_btn"):
-            with st.spinner(f"Simulating {n_sims:,} World Cups…"):
-                sim_result = simulate_tournament(n=n_sims)
+            with st.spinner(f"Simulating {n_sims} World Cups…"):
+                st.session_state["fifa_sim_result"] = simulate_tournament(n=n_sims)
 
+        if "fifa_sim_result" in st.session_state:
+            sim_result = st.session_state["fifa_sim_result"]
             champ_sorted = dict(sorted(sim_result["champion"].items(), key=lambda x: -x[1]))
             final_sorted = dict(sorted(sim_result["finalist"].items(), key=lambda x: -x[1]))
 
