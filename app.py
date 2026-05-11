@@ -675,13 +675,11 @@ if sport == "🏏 IPL 2026":
         with col1:
             st.markdown('<div class="team-label">TEAM 1</div>', unsafe_allow_html=True)
             t1 = st.selectbox("Team 1", ipl_teams, key="ipl_t1", label_visibility="collapsed")
-            t1_wr_pct = st.slider("Team 1 recent win rate %", 0, 100, 50, key="ipl_t1wr")
         with col2:
             st.markdown('<div class="vs-block">VS</div>', unsafe_allow_html=True)
         with col3:
             st.markdown('<div class="team-label">TEAM 2</div>', unsafe_allow_html=True)
             t2 = st.selectbox("Team 2", [t for t in ipl_teams if t != t1], key="ipl_t2", label_visibility="collapsed")
-            t2_wr_pct = st.slider("Team 2 recent win rate %", 0, 100, 50, key="ipl_t2wr")
 
         col_v, col_s = st.columns(2)
         with col_v:
@@ -694,7 +692,7 @@ if sport == "🏏 IPL 2026":
             if t1 == t2:
                 st.error("Please select two different teams.")
             else:
-                result = predict_ipl(t1, t2, venue, stage, t1_wr_pct/100, t2_wr_pct/100)
+                result = predict_ipl(t1, t2, venue, stage, 0.5, 0.5)
                 winner = result["winner"]
                 p1     = result["p_t1"] * 100
                 p2     = result["p_t2"] * 100
@@ -717,10 +715,11 @@ if sport == "🏏 IPL 2026":
             st.warning("No points table loaded. Upload `ipl_points_table.json` to the `data/` folder.")
         else:
             remaining = [f for f in ipl_fixtures if not f.get("played", False)]
-            st.info(f"**{len(remaining)}** remaining fixtures found. Running 1,000 Monte Carlo simulations.")
+            n_ipl_sims = st.slider("Number of Simulations", 200, 1000, 500, step=100, key="ipl_n_sims")
+            st.info(f"**{len(remaining)}** remaining fixtures found. Will run **{n_ipl_sims}** Monte Carlo simulations.")
             if st.button("🎲 Run Simulation", use_container_width=True, type="primary", key="ipl_sim_btn"):
                 with st.spinner("Simulating season…"):
-                    st.session_state["ipl_sim_result"] = simulate_ipl(ipl_points_raw, remaining, n=1000)
+                    st.session_state["ipl_sim_result"] = simulate_ipl(ipl_points_raw, remaining, n=n_ipl_sims)
 
             if "ipl_sim_result" in st.session_state:
                 result = st.session_state["ipl_sim_result"]
@@ -940,7 +939,6 @@ else:  # FIFA World Cup 2026
         with col1:
             st.markdown('<div class="team-label">HOME / TEAM 1</div>', unsafe_allow_html=True)
             f_t1 = st.selectbox("Home Team", FIFA_2026_TEAMS, key="fifa_t1", label_visibility="collapsed")
-            f_t1_wr = st.slider("Team 1 recent win rate %", 0, 100, 50, key="fifa_t1wr") / 100
 
         with col2:
             st.markdown('<div class="vs-block">VS</div>', unsafe_allow_html=True)
@@ -949,7 +947,6 @@ else:  # FIFA World Cup 2026
             st.markdown('<div class="team-label">AWAY / TEAM 2</div>', unsafe_allow_html=True)
             f_t2_opts = [t for t in FIFA_2026_TEAMS if t != f_t1]
             f_t2 = st.selectbox("Away Team", f_t2_opts, key="fifa_t2", label_visibility="collapsed")
-            f_t2_wr = st.slider("Team 2 recent win rate %", 0, 100, 50, key="fifa_t2wr") / 100
 
         f_stage = st.selectbox(
             "Match Stage",
@@ -958,7 +955,7 @@ else:  # FIFA World Cup 2026
         )
 
         if st.button("🔮 Predict Match", use_container_width=True, type="primary", key="fifa_predict_btn"):
-            res = predict_fifa(f_t1, f_t2, f_t1_wr, f_t2_wr)
+            res = predict_fifa(f_t1, f_t2)
             p_win  = res["win"]  * 100
             p_draw = res["draw"] * 100
             p_loss = res["loss"] * 100
