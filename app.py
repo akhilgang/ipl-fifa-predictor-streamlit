@@ -604,29 +604,10 @@ def render_prob_bars(t1, t2, p1_pct, p2_pct, winner):
 #  DATA LOADS
 # ─────────────────────────────────────────────────────────────────────────────
 
-ipl_teams_raw  = load_json("ipl_teams.json") or []
+ipl_teams      = load_json("ipl_teams.json") or []
 ipl_points_raw = load_json("ipl_points_table.json") or {}
 ipl_fixtures   = load_json("ipl_fixtures.json") or []
 ipl_venues     = sorted(set(f.get("venue", "") for f in ipl_fixtures if f.get("venue")))
-
-# Canonical current IPL franchises — filter out defunct/renamed teams that
-# may still appear in ipl_teams.json from historical training data
-IPL_CURRENT_TEAMS = {
-    "Chennai Super Kings",
-    "Delhi Capitals",
-    "Gujarat Titans",
-    "Kolkata Knight Riders",
-    "Lucknow Super Giants",
-    "Mumbai Indians",
-    "Punjab Kings",
-    "Rajasthan Royals",
-    "Royal Challengers Bengaluru",
-    "Sunrisers Hyderabad",
-}
-# Use current teams list; fall back to raw JSON if it somehow has no overlap
-ipl_teams = sorted(t for t in ipl_teams_raw if t in IPL_CURRENT_TEAMS)
-if not ipl_teams:
-    ipl_teams = sorted(IPL_CURRENT_TEAMS)  # hardcoded fallback
 
 fifa_teams_raw = load_json("fifa_teams.json") or []
 # All FIFA 2026 participating teams
@@ -674,11 +655,13 @@ if sport == "🏏 IPL 2026":
         with col1:
             st.markdown('<div class="team-label">TEAM 1</div>', unsafe_allow_html=True)
             t1 = st.selectbox("Team 1", ipl_teams, key="ipl_t1", label_visibility="collapsed")
+            t1_wr_pct = st.slider("Team 1 recent win rate %", 0, 100, 50, key="ipl_t1wr")
         with col2:
             st.markdown('<div class="vs-block">VS</div>', unsafe_allow_html=True)
         with col3:
             st.markdown('<div class="team-label">TEAM 2</div>', unsafe_allow_html=True)
             t2 = st.selectbox("Team 2", [t for t in ipl_teams if t != t1], key="ipl_t2", label_visibility="collapsed")
+            t2_wr_pct = st.slider("Team 2 recent win rate %", 0, 100, 50, key="ipl_t2wr")
 
         col_v, col_s = st.columns(2)
         with col_v:
@@ -691,7 +674,7 @@ if sport == "🏏 IPL 2026":
             if t1 == t2:
                 st.error("Please select two different teams.")
             else:
-                result = predict_ipl(t1, t2, venue, stage, 0.5, 0.5)
+                result = predict_ipl(t1, t2, venue, stage, t1_wr_pct/100, t2_wr_pct/100)
                 winner = result["winner"]
                 p1     = result["p_t1"] * 100
                 p2     = result["p_t2"] * 100
@@ -714,11 +697,10 @@ if sport == "🏏 IPL 2026":
             st.warning("No points table loaded. Upload `ipl_points_table.json` to the `data/` folder.")
         else:
             remaining = [f for f in ipl_fixtures if not f.get("played", False)]
-            n_ipl_sims = st.slider("Number of Simulations", 200, 1000, 500, step=100, key="ipl_n_sims")
-            st.info(f"**{len(remaining)}** remaining fixtures found. Will run **{n_ipl_sims}** Monte Carlo simulations.")
+            st.info(f"**{len(remaining)}** remaining fixtures found. Running 1,000 Monte Carlo simulations.")
             if st.button("🎲 Run Simulation", use_container_width=True, type="primary", key="ipl_sim_btn"):
                 with st.spinner("Simulating season…"):
-                    st.session_state["ipl_sim_result"] = simulate_ipl(ipl_points_raw, remaining, n=n_ipl_sims)
+                    st.session_state["ipl_sim_result"] = simulate_ipl(ipl_points_raw, remaining, n=1000)
 
             if "ipl_sim_result" in st.session_state:
                 result = st.session_state["ipl_sim_result"]
@@ -762,48 +744,122 @@ if sport == "🏏 IPL 2026":
             st.warning("Enter admin password to continue.")
             st.stop()
         st.success("✅ Authenticated")
-        adm1, adm2 = st.tabs(["📅 Fixtures", "📊 Points Table"])
+
+        adm1, adm2, adm3 = st.tabs(["📅 Enter Results", "📊 Points Table", "⬆️ Upload JSON"])
+
+        # ── ENTER RESULTS ────────────────────────────────────────────────────
         with adm1:
-            st.markdown("#### Upload / Edit Fixtures JSON")
-            uploaded = st.file_uploader("Upload ipl_fixtures.json", type="json", key="ipl_fix_upload")
-            if uploaded:
-                data = json.load(uploaded)
-                p = Path(__file__).parent / "data" / "ipl_fixtures.json"
-                with open(p, "w") as f:
-                    json.dump(data, f, indent=2)
-                st.success(f"✅ Saved {len(data)} fixtures")
-                load_json.clear()
-            st.markdown("#### Current Fixtures")
-            if ipl_fixtures:
-                for i, fix in enumerate(ipl_fixtures):
-                    cols = st.columns([3, 1, 3, 2, 2])
-                    cols[0].write(fix.get("team1", ""))
-                    cols[1].write("vs")
-                    cols[2].write(fix.get("team2", ""))
-                    cols[3].write(fix.get("stage", "league"))
-                    played = cols[4].checkbox("Played", value=fix.get("played", False), key=f"ipl_played_{i}")
-                    if played != fix.get("played", False):
-                        ipl_fixtures[i]["played"] = played
-                        p = Path(__file__).parent / "data" / "ipl_fixtures.json"
-                        with open(p, "w") as f:
-                            json.dump(ipl_fixtures, f, indent=2)
-                        load_json.clear()
+            st.markdown("#### Enter Match Results")
+            st.caption("Pick a fixture, enter the actual winner. Fixture, points table and accuracy log all update together.")
+
+            if not ipl_fixtures:
+                st.info("No fixtures loaded. Upload via the Upload JSON tab.")
             else:
-                st.info("No fixtures loaded.")
+                pending   = [(i, f) for i, f in enumerate(ipl_fixtures) if not f.get("played", False)]
+                completed = [(i, f) for i, f in enumerate(ipl_fixtures) if f.get("played", False)]
+                st.markdown(f"**{len(pending)} pending** · {len(completed)} completed")
+
+                if not pending:
+                    st.success("All fixtures have been entered!")
+                else:
+                    for i, fix in pending:
+                        t1    = fix["team1"]
+                        t2    = fix["team2"]
+                        mid   = fix.get("match_id", f"M{i+1}")
+                        date  = fix.get("date", "")
+                        stage = fix.get("stage", "league")
+
+                        with st.expander(f"**{t1}** vs **{t2}**  ·  {date}  ·  {stage.capitalize()}"):
+                            pred_result = predict_ipl(t1, t2, fix.get("venue", ""), stage, 0.5, 0.5)
+                            predicted   = pred_result["winner"]
+                            p1 = pred_result["p_t1"] * 100
+                            p2 = pred_result["p_t2"] * 100
+                            st.caption(f"Model predicts: **{predicted}** ({p1:.0f}% vs {p2:.0f}%)")
+
+                            actual = st.radio("Actual winner", [t1, t2], key=f"ipl_res_{mid}", horizontal=True)
+                            loser  = t2 if actual == t1 else t1
+                            col_nrr1, col_nrr2 = st.columns(2)
+                            nrr_winner = col_nrr1.number_input(f"NRR Δ for {actual}", value=0.0, step=0.001, format="%.3f", key=f"ipl_nrr_w_{mid}")
+                            nrr_loser  = col_nrr2.number_input(f"NRR Δ for {loser}",  value=0.0, step=0.001, format="%.3f", key=f"ipl_nrr_l_{mid}")
+
+                            if st.button("✅ Save Result", key=f"ipl_save_{mid}", type="primary"):
+                                # 1. Mark fixture played
+                                ipl_fixtures[i]["played"]        = True
+                                ipl_fixtures[i]["actual_winner"] = actual
+                                fix_path = Path(__file__).parent / "data" / "ipl_fixtures.json"
+                                with open(fix_path, "w") as f:
+                                    json.dump(ipl_fixtures, f, indent=2)
+
+                                # 2. Update points table
+                                pts = deepcopy(ipl_points_raw)
+                                for team in [actual, loser]:
+                                    if team not in pts:
+                                        pts[team] = {"played": 0, "won": 0, "lost": 0, "pts": 0, "nrr": 0.0}
+                                pts[actual]["played"] = pts[actual].get("played", 0) + 1
+                                pts[actual]["won"]    = pts[actual].get("won", 0) + 1
+                                pts[actual]["pts"]    = pts[actual].get("pts", 0) + 2
+                                pts[actual]["nrr"]    = round(pts[actual].get("nrr", 0.0) + nrr_winner, 3)
+                                pts[loser]["played"]  = pts[loser].get("played", 0) + 1
+                                pts[loser]["lost"]    = pts[loser].get("lost", 0) + 1
+                                pts[loser]["nrr"]     = round(pts[loser].get("nrr", 0.0) + nrr_loser, 3)
+                                pts_path = Path(__file__).parent / "data" / "ipl_points_table.json"
+                                with open(pts_path, "w") as f:
+                                    json.dump(pts, f, indent=2)
+
+                                # 3. Append to accuracy log
+                                correct   = "yes" if predicted == actual else "no"
+                                acc_entry = {
+                                    "match_id":         mid,
+                                    "team1":            t1,
+                                    "team2":            t2,
+                                    "venue":            fix.get("venue", ""),
+                                    "stage":            stage,
+                                    "predicted_winner": predicted,
+                                    "p_t1":             round(p1, 1),
+                                    "p_t2":             round(p2, 1),
+                                    "actual_winner":    actual,
+                                    "correct":          correct,
+                                    "timestamp":        datetime.now().isoformat(),
+                                }
+                                records = load_accuracy("ipl")
+                                records = [r for r in records if r.get("match_id") != mid]
+                                records.append(acc_entry)
+                                save_accuracy(records, "ipl")
+                                load_json.clear()
+
+                                emoji = "✅ Correct!" if correct == "yes" else "❌ Incorrect"
+                                st.success(f"Saved! Prediction was {emoji}")
+                                st.rerun()
+
+                if completed:
+                    with st.expander(f"✅ Completed ({len(completed)})"):
+                        for i, fix in completed:
+                            mid    = fix.get("match_id", f"M{i+1}")
+                            actual = fix.get("actual_winner", "—")
+                            c1, c2, c3, c4 = st.columns([3, 3, 2, 1])
+                            c1.write(f"{fix['team1']} vs {fix['team2']}")
+                            c2.write(f"Winner: **{actual}**")
+                            c3.write(fix.get("date", ""))
+                            if c4.button("Undo", key=f"ipl_undo_{mid}"):
+                                ipl_fixtures[i]["played"] = False
+                                ipl_fixtures[i].pop("actual_winner", None)
+                                fix_path = Path(__file__).parent / "data" / "ipl_fixtures.json"
+                                with open(fix_path, "w") as f:
+                                    json.dump(ipl_fixtures, f, indent=2)
+                                records = load_accuracy("ipl")
+                                records = [r for r in records if r.get("match_id") != mid]
+                                save_accuracy(records, "ipl")
+                                load_json.clear()
+                                st.rerun()
+
+        # ── POINTS TABLE manual correction ───────────────────────────────────
         with adm2:
-            st.markdown("#### Upload / Edit Points Table JSON")
-            uploaded2 = st.file_uploader("Upload ipl_points_table.json", type="json", key="ipl_pts_upload")
-            if uploaded2:
-                data2 = json.load(uploaded2)
-                p = Path(__file__).parent / "data" / "ipl_points_table.json"
-                with open(p, "w") as f:
-                    json.dump(data2, f, indent=2)
-                st.success("✅ Points table saved")
-                load_json.clear()
-            st.markdown("#### Edit Points Manually")
+            st.markdown("#### Edit Points Table")
+            st.caption("Use only to correct NRR or fix data errors. Enter Results updates points automatically.")
             if ipl_points_raw:
                 updated = deepcopy(ipl_points_raw)
-                for team in list(ipl_points_raw.keys()):
+                current_only = [t for t in ipl_points_raw if t in IPL_CURRENT_TEAMS]
+                for team in sorted(current_only):
                     row = ipl_points_raw[team]
                     with st.expander(team):
                         c1, c2, c3, c4 = st.columns(4)
@@ -819,14 +875,35 @@ if sport == "🏏 IPL 2026":
                     st.success("✅ Saved!")
                     load_json.clear()
 
+        # ── BULK JSON UPLOAD ──────────────────────────────────────────────────
+        with adm3:
+            st.markdown("#### Bulk Upload JSONs")
+            st.caption("Use at season start to load the full fixture list, or to restore from backup.")
+            uploaded = st.file_uploader("Upload ipl_fixtures.json", type="json", key="ipl_fix_upload")
+            if uploaded:
+                data = json.load(uploaded)
+                p = Path(__file__).parent / "data" / "ipl_fixtures.json"
+                with open(p, "w") as f:
+                    json.dump(data, f, indent=2)
+                st.success(f"✅ Saved {len(data)} fixtures")
+                load_json.clear()
+            uploaded2 = st.file_uploader("Upload ipl_points_table.json", type="json", key="ipl_pts_upload")
+            if uploaded2:
+                data2 = json.load(uploaded2)
+                p = Path(__file__).parent / "data" / "ipl_points_table.json"
+                with open(p, "w") as f:
+                    json.dump(data2, f, indent=2)
+                st.success("✅ Points table saved")
+                load_json.clear()
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  FIFA SECTION
 # ═══════════════════════════════════════════════════════════════════════════════
 
 else:  # FIFA World Cup 2026
 
-    tab_predict_f, tab_groups, tab_sim_f, tab_fixtures_f, tab_acc_f = st.tabs([
-        "⚽ Predict Match", "🗂️ Group Stage", "🌍 Tournament Sim", "📅 All Fixtures", "✅ Accuracy"
+    tab_predict_f, tab_groups, tab_sim_f, tab_fixtures_f, tab_acc_f, tab_admin_f = st.tabs([
+        "⚽ Predict Match", "🗂️ Group Stage", "🌍 Tournament Sim", "📅 All Fixtures", "✅ Accuracy", "🔧 Admin"
     ])
 
     # ── FIFA TAB 1 — PREDICT ─────────────────────────────────────────────────
@@ -844,6 +921,7 @@ else:  # FIFA World Cup 2026
         with col1:
             st.markdown('<div class="team-label">HOME / TEAM 1</div>', unsafe_allow_html=True)
             f_t1 = st.selectbox("Home Team", FIFA_2026_TEAMS, key="fifa_t1", label_visibility="collapsed")
+            f_t1_wr = st.slider("Team 1 recent win rate %", 0, 100, 50, key="fifa_t1wr") / 100
 
         with col2:
             st.markdown('<div class="vs-block">VS</div>', unsafe_allow_html=True)
@@ -852,6 +930,7 @@ else:  # FIFA World Cup 2026
             st.markdown('<div class="team-label">AWAY / TEAM 2</div>', unsafe_allow_html=True)
             f_t2_opts = [t for t in FIFA_2026_TEAMS if t != f_t1]
             f_t2 = st.selectbox("Away Team", f_t2_opts, key="fifa_t2", label_visibility="collapsed")
+            f_t2_wr = st.slider("Team 2 recent win rate %", 0, 100, 50, key="fifa_t2wr") / 100
 
         f_stage = st.selectbox(
             "Match Stage",
@@ -860,7 +939,7 @@ else:  # FIFA World Cup 2026
         )
 
         if st.button("🔮 Predict Match", use_container_width=True, type="primary", key="fifa_predict_btn"):
-            res = predict_fifa(f_t1, f_t2)
+            res = predict_fifa(f_t1, f_t2, f_t1_wr, f_t2_wr)
             p_win  = res["win"]  * 100
             p_draw = res["draw"] * 100
             p_loss = res["loss"] * 100
@@ -998,14 +1077,12 @@ else:  # FIFA World Cup 2026
         </p>
         """, unsafe_allow_html=True)
 
-        n_sims = st.slider("Number of Simulations", 15, 50, 30, step=5, key="fifa_n_sims")
+        n_sims = st.slider("Number of Simulations", 30, 100, 50, step=10, key="fifa_n_sims")
 
         if st.button("🌍 Run Tournament Simulation", use_container_width=True, type="primary", key="fifa_sim_btn"):
-            with st.spinner(f"Simulating {n_sims} World Cups…"):
-                st.session_state["fifa_sim_result"] = simulate_tournament(n=n_sims)
+            with st.spinner(f"Simulating {n_sims:,} World Cups…"):
+                sim_result = simulate_tournament(n=n_sims)
 
-        if "fifa_sim_result" in st.session_state:
-            sim_result = st.session_state["fifa_sim_result"]
             champ_sorted = dict(sorted(sim_result["champion"].items(), key=lambda x: -x[1]))
             final_sorted = dict(sorted(sim_result["finalist"].items(), key=lambda x: -x[1]))
 
@@ -1089,3 +1166,109 @@ else:  # FIFA World Cup 2026
     with tab_acc_f:
         st.markdown('<div class="section-title">FIFA Model Accuracy</div>', unsafe_allow_html=True)
         render_accuracy_tab("fifa")
+
+    # ── FIFA TAB 6 — ADMIN ────────────────────────────────────────────────────
+    with tab_admin_f:
+        st.markdown('<div class="section-title">Admin Panel</div>', unsafe_allow_html=True)
+        fifa_admin_key = st.text_input("Admin Password", type="password", key="fifa_admin_pw")
+        FIFA_ADMIN_PASS = os.environ.get("ADMIN_PASSWORD", "ipl2026admin")
+        if fifa_admin_key != FIFA_ADMIN_PASS:
+            st.warning("Enter admin password to continue.")
+            st.stop()
+        st.success("✅ Authenticated")
+
+        st.markdown("#### Enter Match Results")
+        st.caption("Select a fixture, enter the actual result. Accuracy log updates automatically.")
+
+        # Helper: stable match ID from fixture tuple
+        def fifa_mid(home, away, date):
+            return f"FIFA_{home.replace(' ','_')}_{away.replace(' ','_')}_{date}"
+
+        fifa_acc_records = load_accuracy("fifa")
+        already_logged   = {r["match_id"] for r in fifa_acc_records}
+        team_to_group    = {t: g for g, teams in FIFA_GROUPS.items() for t in teams}
+
+        pending_fifa   = [(h, a, d) for h, a, d in FIFA_GROUP_FIXTURES if fifa_mid(h, a, d) not in already_logged]
+        completed_fifa = [(h, a, d) for h, a, d in FIFA_GROUP_FIXTURES if fifa_mid(h, a, d) in already_logged]
+
+        st.markdown(f"**{len(pending_fifa)} pending** · {len(completed_fifa)} completed")
+
+        grp_filter_admin = st.selectbox(
+            "Filter by group",
+            ["All Groups"] + [f"Group {g}" for g in sorted(FIFA_GROUPS.keys())],
+            key="fifa_admin_grp",
+        )
+
+        shown_pending = [
+            (h, a, d) for h, a, d in pending_fifa
+            if grp_filter_admin == "All Groups"
+            or f"Group {team_to_group.get(h,'?')}" == grp_filter_admin
+        ]
+
+        if not shown_pending:
+            st.success("All filtered fixtures have been entered!")
+        else:
+            for home, away, date in shown_pending:
+                mid = fifa_mid(home, away, date)
+                grp = team_to_group.get(home, "?")
+
+                with st.expander(f"**{home}** vs **{away}**  ·  {date}  ·  Group {grp}"):
+                    res    = predict_fifa(home, away)
+                    p_win  = res["win"]  * 100
+                    p_draw = res["draw"] * 100
+                    p_loss = res["loss"] * 100
+                    pred_label = home if res["likely"] == "win" else (away if res["likely"] == "loss" else "Draw")
+                    st.caption(f"Model predicts: **{pred_label}**  ·  {home} {p_win:.0f}%  Draw {p_draw:.0f}%  {away} {p_loss:.0f}%")
+
+                    actual_sel = st.radio(
+                        "Actual result",
+                        [f"{home} Win", "Draw", f"{away} Win"],
+                        key=f"fifa_res_{mid}",
+                        horizontal=True,
+                    )
+
+                    if st.button("✅ Save Result", key=f"fifa_save_{mid}", type="primary"):
+                        actual_winner = (
+                            home  if f"{home} Win" == actual_sel else
+                            away  if f"{away} Win" == actual_sel else
+                            "Draw"
+                        )
+                        correct   = "yes" if pred_label == actual_winner else "no"
+                        acc_entry = {
+                            "match_id":         mid,
+                            "team1":            home,
+                            "team2":            away,
+                            "stage":            "group",
+                            "predicted_winner": pred_label,
+                            "p_t1":             round(p_win, 1),
+                            "p_draw":           round(p_draw, 1),
+                            "p_t2":             round(p_loss, 1),
+                            "actual_winner":    actual_winner,
+                            "correct":          correct,
+                            "timestamp":        datetime.now().isoformat(),
+                        }
+                        records = load_accuracy("fifa")
+                        records = [r for r in records if r.get("match_id") != mid]
+                        records.append(acc_entry)
+                        save_accuracy(records, "fifa")
+                        emoji = "✅ Correct!" if correct == "yes" else "❌ Incorrect"
+                        st.success(f"Saved! Prediction was {emoji}")
+                        st.rerun()
+
+        if completed_fifa:
+            with st.expander(f"✅ Completed ({len(completed_fifa)})"):
+                for home, away, date in completed_fifa:
+                    mid = fifa_mid(home, away, date)
+                    rec = next((r for r in fifa_acc_records if r["match_id"] == mid), {})
+                    actual  = rec.get("actual_winner", "—")
+                    correct = rec.get("correct", "—")
+                    icon    = "✅" if correct == "yes" else "❌"
+                    c1, c2, c3, c4 = st.columns([3, 3, 1, 1])
+                    c1.write(f"{home} vs {away}")
+                    c2.write(f"Winner: **{actual}**")
+                    c3.write(icon)
+                    if c4.button("Undo", key=f"fifa_undo_{mid}"):
+                        records = load_accuracy("fifa")
+                        records = [r for r in records if r.get("match_id") != mid]
+                        save_accuracy(records, "fifa")
+                        st.rerun()
